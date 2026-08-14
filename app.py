@@ -1,1071 +1,345 @@
-import os
-from io import BytesIO
-
 import streamlit as st
+import pandas as pd
+import os
+import glob
+import tempfile
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter as L
+import io
 
-
-# =========================================================
-# PAGE CONFIG
-# =========================================================
-
-st.set_page_config(
-    page_title="Ratio Confirmation",
-    page_icon="📊",
-    layout="centered"
-)
-
-
-# =========================================================
-# CREATE RATIO LIST
-# =========================================================
-
-def create_ratio_list(ratio_input):
-
-    ratio_input = ratio_input.strip()
-
+# ================= SETTINGS =================
+def process_excel(file_content, service, ratio):
+    """Process the Excel file with given service and ratio"""
+    
+    # Create temporary files
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_input:
+        tmp_input.write(file_content)
+        tmp_input_path = tmp_input.name
+    
     try:
-
-        if "-" in ratio_input:
-
-            parts = ratio_input.split("-")
-
-            if len(parts) != 2:
-                raise ValueError
-
-            start = int(parts[0])
-            end = int(parts[1])
-
-            if start > end:
-                raise ValueError
-
-            ratio_list = list(
-                range(start, end + 1, 5)
-            )
-
+        # ================= SETTINGS =================
+        service = service.upper().strip()
+        if service not in ("FPS", "IRIS"):
+            raise Exception("Service must be FPS or IRIS")
+        
+        if isinstance(ratio, int):
+            ratios = [ratio]
+        elif isinstance(ratio, str) and "-" in ratio:
+            a, b = map(int, ratio.split("-"))
+            ratios = list(range(a, b + 1, 5))
         else:
-
-            ratio_list = [int(ratio_input)]
-
-    except Exception:
-
-        raise Exception(
-            "Invalid Ratio. Please enter 75 or 20-60."
-        )
-
-    if any(r <= 0 for r in ratio_list):
-
-        raise Exception(
-            "Ratio must be greater than 0."
-        )
-
-    return ratio_list
-
-
-# =========================================================
-# PROCESS EXCEL
-# =========================================================
-
-def process_excel(
-    uploaded_file,
-    service,
-    ratio_input,
-    progress_bar,
-    status
-):
-
-    # -----------------------------------------------------
-    # RATIO
-    # -----------------------------------------------------
-
-    ratio_list = create_ratio_list(
-        ratio_input
-    )
-
-    status.write(
-        f"🔢 Ratio List: {ratio_list}"
-    )
-
-    progress_bar.progress(5)
-
-
-    # -----------------------------------------------------
-    # LOAD EXCEL
-    # -----------------------------------------------------
-
-    status.write(
-        "📂 Loading Excel file..."
-    )
-
-    input_name = uploaded_file.name
-
-    file_data = uploaded_file.getvalue()
-
-    keep_vba = input_name.lower().endswith(".xlsm")
-
-    wb = load_workbook(
-        BytesIO(file_data),
-        keep_vba=keep_vba
-    )
-
-    if not wb.sheetnames:
-
-        raise Exception(
-            "Excel file does not contain any sheet."
-        )
-
-    base_ws = wb[wb.sheetnames[0]]
-
-    progress_bar.progress(10)
-
-
-    # -----------------------------------------------------
-    # CREATE RATIO SHEETS
-    # -----------------------------------------------------
-
-    status.write(
-        "📄 Creating ratio sheets..."
-    )
-
-    base_ws.title = str(
-        ratio_list[0]
-    )
-
-    for r in ratio_list[1:]:
-
-        new_ws = wb.copy_worksheet(
-            base_ws
-        )
-
-        new_ws.title = str(r)
-
-    progress_bar.progress(15)
-
-
-    # -----------------------------------------------------
-    # MONTH NAMES
-    # -----------------------------------------------------
-
-    months = [
-        "Jan'", "Feb'", "Mar'", "Apr'",
-        "May'", "Jun'", "Jul'", "Aug'",
-        "Sep'", "Oct'", "Nov'", "Dec'"
-    ]
-
-
-    # -----------------------------------------------------
-    # PROCESS EACH RATIO SHEET
-    # -----------------------------------------------------
-
-    total_ratios = len(ratio_list)
-
-    for index, ratio in enumerate(
-        ratio_list
-    ):
-
-        progress = 15 + int(
-            (index / total_ratios) * 65
-        )
-
-        progress_bar.progress(
-            progress
-        )
-
-        status.write(
-            f"⚙️ Processing Ratio: {ratio}"
-        )
-
-        div = ratio + 1
-
-        ws = wb[str(ratio)]
-
-
-        # -------------------------------------------------
-        # FIND MONTH COLUMNS
-        # -------------------------------------------------
-
-        mcols = []
-
-        for c in range(
-            1,
-            ws.max_column + 1
-        ):
-
-            h = str(
-                ws.cell(1, c).value or ""
-            )
-
-            if any(
-                m in h
-                for m in months
-            ):
-
-                mcols.append(c)
-
-        if not mcols:
-
-            status.write(
-                f"⚠️ No month columns found in Ratio {ratio}"
-            )
-
-            continue
-
-
-        # -------------------------------------------------
-        # TOTAL CANDIDATE & MAX CANDIDATE
-        # -------------------------------------------------
-
-        tot = ws.max_column + 1
-
-        mx = tot + 1
-
-        ws.cell(
-            1,
-            tot
-        ).value = "Total Candidate"
-
-        ws.cell(
-            1,
-            mx
-        ).value = "Max Candidate"
-
-
-        for r in range(
-            2,
-            ws.max_row + 1
-        ):
-
-            refs = [
-                f"{get_column_letter(c)}{r}"
-                for c in mcols
+            ratios = [int(ratio)]
+        
+        # ================= FILE =================
+        folder = os.path.dirname(tmp_input_path)
+        
+        # Check if there are any Excel files in the folder
+        files = [tmp_input_path]  # Use the uploaded file directly
+        
+        infile = files[0]
+        outfile = os.path.splitext(infile)[0] + "_Output.xlsx"
+        
+        wb = load_workbook(infile, keep_vba=infile.lower().endswith(".xlsm"))
+        
+        # ================= SHEETS =================
+        if "Summary" in wb.sheetnames:
+            del wb["Summary"]
+        
+        ws = wb[wb.sheetnames[0]]
+        ws.title = str(ratios[0])
+        
+        for x in ratios[1:]:
+            wb.copy_worksheet(ws).title = str(x)
+        
+        # ================= PROCESS =================
+        months = ["Jan'", "Feb'", "Mar'", "Apr'", "May'", "Jun'",
+                  "Jul'", "Aug'", "Sep'", "Oct'", "Nov'", "Dec'"]
+        
+        for rv in ratios:
+            ws = wb[str(rv)]
+            div = rv + 1
+            
+            # Month columns
+            mcols = [
+                c for c in range(1, ws.max_column + 1)
+                if any(m in str(ws.cell(1, c).value or "") for m in months)
             ]
-
-            ws.cell(
-                r,
-                tot
-            ).value = (
-                f"=SUM({','.join(refs)})"
+            
+            if not mcols:
+                raise Exception(f"No month columns in sheet {rv}")
+            
+            # Total / Max Candidate
+            total = ws.max_column + 1
+            maxcand = total + 1
+            ws.cell(1, total).value = "Total Candidate"
+            ws.cell(1, maxcand).value = "Max Candidate"
+            
+            for r in range(2, ws.max_row + 1):
+                refs = ",".join(f"{L(c)}{r}" for c in mcols)
+                ws.cell(r, total).value = f"=SUM({refs})"
+                ws.cell(r, maxcand).value = f"=MAX({refs})"
+            
+            # Opr columns
+            opr_start = maxcand + 1
+            opr = []
+            
+            for i, c in enumerate(mcols):
+                oc = opr_start + i
+                opr.append(oc)
+                ws.cell(1, oc).value = f"{ws.cell(1,c).value} Opr"
+                
+                for r in range(2, ws.max_row + 1):
+                    ws.cell(r, oc).value = f"=ROUNDUP({L(c)}{r}/{div},0)"
+            
+            # Max Opr
+            maxopr = opr_start + len(opr)
+            ws.cell(1, maxopr).value = "Max Opr"
+            
+            for r in range(2, ws.max_row + 1):
+                refs = ",".join(f"{L(c)}{r}" for c in opr)
+                ws.cell(r, maxopr).value = f"=MAX({refs})"
+            
+            # Service columns
+            names = (
+                ["Tab", "FPS", "OTG", "Hologram", "Id Card", "Jacket"]
+                if service == "FPS"
+                else ["Tab", "IRIS", "FPS", "OTG", "Hologram", "Id Card", "Jacket"]
             )
-
-            ws.cell(
-                r,
-                mx
-            ).value = (
-                f"=MAX({','.join(refs)})"
-            )
-
-
-        # -------------------------------------------------
-        # OPR COLUMNS
-        # -------------------------------------------------
-
-        ins = mx + 1
-
-        opr = []
-
-        for i, oc in enumerate(
-            mcols
-        ):
-
-            ws.insert_cols(
-                ins + i
-            )
-
-            nc = ins + i
-
-            hdr = ws.cell(
-                1,
-                oc
-            ).value
-
-            ws.cell(
-                1,
-                nc
-            ).value = f"{hdr} Opr"
-
-            opr.append(nc)
-
-            col = get_column_letter(
-                oc
-            )
-
-            for r in range(
-                2,
-                ws.max_row + 1
-            ):
-
-                ws.cell(
-                    r,
-                    nc
-                ).value = (
-                    f"=ROUNDUP("
-                    f"{col}{r}/{div},0)"
+            
+            sc = {}
+            for i, name in enumerate(names):
+                sc[name] = maxopr + 1 + i
+                ws.cell(1, sc[name]).value = name
+            
+            T, M = L(total), L(maxopr)
+            tab = L(sc["Tab"])
+            
+            for r in range(2, ws.max_row + 1):
+                ws.cell(r, sc["Tab"]).value = (
+                    f'=IF({M}{r}=0,0,IF({M}{r}>=8,'
+                    f'IF({M}{r}<16,{M}{r}+2,{M}{r}+3),{M}{r}+1))'
                 )
-
-
-        # -------------------------------------------------
-        # MAX OPR
-        # -------------------------------------------------
-
-        maxopr = ws.max_column + 1
-
-        ws.cell(
-            1,
-            maxopr
-        ).value = "Max Opr"
-
-
-        for r in range(
-            2,
-            ws.max_row + 1
-        ):
-
-            refs = [
-                f"{get_column_letter(c)}{r}"
-                for c in opr
-            ]
-
-            ws.cell(
-                r,
-                maxopr
-            ).value = (
-                f"=MAX({','.join(refs)})"
-            )
-
-
-        # -------------------------------------------------
-        # SERVICE COLUMNS
-        # -------------------------------------------------
-
-        if service.upper() == "FPS":
-
-            names = [
-                "Tab",
-                "FPS",
-                "OTG",
-                "Hologram",
-                "Id Card",
-                "Jacket"
-            ]
-
-        elif service.upper() == "IRIS":
-
-            names = [
-                "Tab",
-                "IRIS",
-                "FPS",
-                "OTG",
-                "Hologram",
-                "Id Card",
-                "Jacket"
-            ]
-
-        else:
-
-            raise Exception(
-                "Service must be FPS or IRIS."
-            )
-
-
-        start = ws.max_column + 1
-
-        cols = {}
-
-        for i, name in enumerate(
-            names
-        ):
-
-            col = start + i
-
-            cols[name] = col
-
-            ws.cell(
-                1,
-                col
-            ).value = name
-
-
-        maxopr_letter = get_column_letter(
-            maxopr
-        )
-
-        total_letter = get_column_letter(
-            tot
-        )
-
-        tab_letter = get_column_letter(
-            cols["Tab"]
-        )
-
-
-        # -------------------------------------------------
-        # SERVICE FORMULAS
-        # -------------------------------------------------
-
-        for r in range(
-            2,
-            ws.max_row + 1
-        ):
-
-            # TAB
-
-            ws.cell(
-                r,
-                cols["Tab"]
-            ).value = (
-                f"=IF({maxopr_letter}{r}=0,0,"
-                f"IF(AND("
-                f"{maxopr_letter}{r}>=8,"
-                f"{maxopr_letter}{r}<16),"
-                f"{maxopr_letter}{r}+2,"
-                f"IF("
-                f"{maxopr_letter}{r}>15,"
-                f"{maxopr_letter}{r}+3,"
-                f"{maxopr_letter}{r}+1"
-                f")))"
-            )
-
-
-            # FPS / IRIS
-
-            if service.upper() == "FPS":
-
-                ws.cell(
-                    r,
-                    cols["FPS"]
-                ).value = (
-                    f"={tab_letter}{r}"
-                )
-
-            else:
-
-                ws.cell(
-                    r,
-                    cols["IRIS"]
-                ).value = (
-                    f"={tab_letter}{r}"
-                )
-
-                ws.cell(
-                    r,
-                    cols["FPS"]
-                ).value = "=1"
-
-
-            # OTG
-
-            ws.cell(
-                r,
-                cols["OTG"]
-            ).value = (
-                f"={tab_letter}{r}*2"
-            )
-
-
-            # HOLOGRAM
-
-            ws.cell(
-                r,
-                cols["Hologram"]
-            ).value = (
-                f"=ROUNDUP("
-                f"{total_letter}{r}/100,0)+1"
-            )
-
-
-            # ID CARD
-
-            ws.cell(
-                r,
-                cols["Id Card"]
-            ).value = (
-                f"={maxopr_letter}{r}+1"
-            )
-
-
-            # JACKET
-
-            ws.cell(
-                r,
-                cols["Jacket"]
-            ).value = (
-                f"={maxopr_letter}{r}"
-            )
-
-
-    # =====================================================
-    # CREATE SUMMARY
-    # =====================================================
-
-    status.write(
-        "📊 Creating Summary sheet..."
-    )
-
-    progress_bar.progress(82)
-
-
-    if "Summary" in wb.sheetnames:
-
-        del wb["Summary"]
-
-
-    summary = wb.create_sheet(
-        "Summary",
-        0
-    )
-
-
-    first_ws = wb[
-        str(ratio_list[0])
-    ]
-
-
-    # -----------------------------------------------------
-    # FIND MONTH OPR COLUMNS
-    # -----------------------------------------------------
-
-    month_headers = []
-
-    opr_columns = []
-
-    for c in range(
-        1,
-        first_ws.max_column + 1
-    ):
-
-        h = str(
-            first_ws.cell(1, c).value or ""
-        ).strip()
-
-        if (
-            h.endswith(" Opr")
-            and h != "Max Opr"
-        ):
-
-            month_headers.append(h)
-
-            opr_columns.append(c)
-
-
-    # -----------------------------------------------------
-    # HEADER MAP
-    # -----------------------------------------------------
-
-    header_map = {}
-
-    for c in range(
-        1,
-        first_ws.max_column + 1
-    ):
-
-        header_map[
-            str(
-                first_ws.cell(
-                    1,
-                    c
-                ).value
-            )
-        ] = c
-
-
-    if "Total Candidate" not in header_map:
-
-        raise Exception(
-            "Total Candidate column not found."
-        )
-
-    if "Max Candidate" not in header_map:
-
-        raise Exception(
-            "Max Candidate column not found."
-        )
-
-    if "Max Opr" not in header_map:
-
-        raise Exception(
-            "Max Opr column not found."
-        )
-
-
-    tot_col = header_map[
-        "Total Candidate"
-    ]
-
-    maxcand_col = header_map[
-        "Max Candidate"
-    ]
-
-    maxopr_col = header_map[
-        "Max Opr"
-    ]
-
-
-    # -----------------------------------------------------
-    # SERVICE COLUMN MAP
-    # -----------------------------------------------------
-
-    service_cols = {}
-
-    for name in [
-        "Tab",
-        "FPS",
-        "IRIS",
-        "OTG",
-        "Hologram",
-        "Id Card",
-        "Jacket"
-    ]:
-
-        if name in header_map:
-
-            service_cols[name] = (
-                header_map[name]
-            )
-
-
-    # -----------------------------------------------------
-    # SUMMARY HEADERS
-    # -----------------------------------------------------
-
-    headers = [
-        "Ratio",
-        "Total Center",
-        "Total Candidate",
-        "Max Candidate"
-    ]
-
-    headers += month_headers
-
-    headers += [
-        "Max Opr"
-    ]
-
-
-    if service.upper() == "FPS":
-
-        headers += [
-            "Tab",
-            "FPS",
-            "OTG",
-            "Hologram",
-            "Id Card",
-            "Jacket"
+                
+                if service == "FPS":
+                    ws.cell(r, sc["FPS"]).value = f"={tab}{r}"
+                else:
+                    ws.cell(r, sc["IRIS"]).value = f"={tab}{r}"
+                    ws.cell(r, sc["FPS"]).value = "=1"
+                
+                ws.cell(r, sc["OTG"]).value = f"={tab}{r}*2"
+                ws.cell(r, sc["Hologram"]).value = f"=ROUNDUP({T}{r}/100,0)+1"
+                ws.cell(r, sc["Id Card"]).value = f"={M}{r}+1"
+                ws.cell(r, sc["Jacket"]).value = f"={M}{r}"
+        
+        # ================= SUMMARY =================
+        summary = wb.create_sheet("Summary", 0)
+        first = wb[str(ratios[0])]
+        
+        headers = [str(first.cell(1,c).value or "").strip()
+                   for c in range(1, first.max_column + 1)]
+        
+        hm = {h:i+1 for i,h in enumerate(headers) if h}
+        
+        opr_headers = [
+            h for h in headers
+            if h.endswith(" Opr") and h != "Max Opr"
         ]
-
-    else:
-
-        headers += [
-            "Tab",
-            "IRIS",
-            "FPS",
-            "OTG",
-            "Hologram",
-            "Id Card",
-            "Jacket"
-        ]
-
-    headers.append(
-        "Avg"
-    )
-
-
-    for c, h in enumerate(
-        headers,
-        1
-    ):
-
-        summary.cell(
-            1,
-            c
-        ).value = h
-
-
-    # -----------------------------------------------------
-    # SUMMARY DATA
-    # -----------------------------------------------------
-
-    for row, ratio in enumerate(
-        ratio_list,
-        2
-    ):
-
-        sh = f"'{ratio}'"
-
-        col = 1
-
-
-        # Ratio
-
-        summary.cell(
-            row,
-            col
-        ).value = ratio
-
-        col += 1
-
-
-        # Total Center
-
-        letter = get_column_letter(
-            tot_col
+        
+        service_names = (
+            ["Tab","FPS","OTG","Hologram","Id Card","Jacket"]
+            if service == "FPS"
+            else ["Tab","IRIS","FPS","OTG","Hologram","Id Card","Jacket"]
         )
-
-        summary.cell(
-            row,
-            col
-        ).value = (
-            f"=COUNT("
-            f"{sh}!{letter}:{letter}"
-            f")"
+        
+        summary_headers = (
+            ["Ratio","Total Center","Total Candidate","Max Candidate"]
+            + opr_headers
+            + ["Max Opr"]
+            + service_names
+            + ["Avg"]
         )
-
-        col += 1
-
-
-        # Total Candidate
-
-        summary.cell(
-            row,
-            col
-        ).value = (
-            f"=SUM("
-            f"{sh}!{letter}:{letter}"
-            f")"
-        )
-
-        col += 1
-
-
-        # Max Candidate
-
-        letter = get_column_letter(
-            maxcand_col
-        )
-
-        summary.cell(
-            row,
-            col
-        ).value = (
-            f"=SUM("
-            f"{sh}!{letter}:{letter}"
-            f")"
-        )
-
-        col += 1
-
-
-        # Monthly OPR
-
-        for oc in opr_columns:
-
-            letter = get_column_letter(
-                oc
+        
+        for c,h in enumerate(summary_headers,1):
+            summary.cell(1,c).value = h
+        
+        for r, rv in enumerate(ratios, 2):
+            sh = f"'{rv}'"
+            summary.cell(r,1).value = rv
+            
+            source = {
+                "Total Center": "Total Candidate",
+                "Total Candidate": "Total Candidate",
+                "Max Candidate": "Max Candidate",
+                "Max Opr": "Max Opr",
+                **{x:x for x in opr_headers},
+                **{x:x for x in service_names}
+            }
+            
+            for c,h in enumerate(summary_headers[1:-1],2):
+                src = hm[source[h]]
+                fn = "COUNT" if h == "Total Center" else "SUM"
+                summary.cell(r,c).value = f"={fn}({sh}!{L(src)}:{L(src)})"
+            
+            # Avg = Max Candidate / Max Opr
+            mc = summary_headers.index("Max Candidate") + 1
+            mo = summary_headers.index("Max Opr") + 1
+            av = summary_headers.index("Avg") + 1
+            
+            summary.cell(r,av).value = (
+                f"=IFERROR(ROUNDUP({L(mc)}{r}/{L(mo)}{r},0),0)"
             )
-
-            summary.cell(
-                row,
-                col
-            ).value = (
-                f"=SUM("
-                f"{sh}!{letter}:{letter}"
-                f")"
+        
+        # ================= FORMAT / SAVE =================
+        summary.freeze_panes = "A2"
+        
+        for col in summary.columns:
+            letter = L(col[0].column)
+            summary.column_dimensions[letter].width = min(
+                max(len(str(x.value or "")) for x in col) + 2, 8
             )
-
-            col += 1
-
-
-        # Max OPR
-
-        letter = get_column_letter(
-            maxopr_col
-        )
-
-        summary.cell(
-            row,
-            col
-        ).value = (
-            f"=SUM("
-            f"{sh}!{letter}:{letter}"
-            f")"
-        )
-
-        col += 1
-
-
-        # Service order
-
-        order = [
-            "Tab"
-        ]
-
-        if service.upper() == "IRIS":
-
-            order.append(
-                "IRIS"
-            )
-
-        order += [
-            "FPS",
-            "OTG",
-            "Hologram",
-            "Id Card",
-            "Jacket"
-        ]
-
-
-        for name in order:
-
-            if name not in service_cols:
-
-                continue
-
-            letter = get_column_letter(
-                service_cols[name]
-            )
-
-            summary.cell(
-                row,
-                col
-            ).value = (
-                f"=SUM("
-                f"{sh}!{letter}:{letter}"
-                f")"
-            )
-
-            col += 1
-
-
-        # Average
-
-        last_data_col = col - 1
-
-        if last_data_col >= 2:
-
-            summary.cell(
-                row,
-                col
-            ).value = (
-                f"=AVERAGE("
-                f"B{row}:"
-                f"{get_column_letter(last_data_col)}{row}"
-                f")"
-            )
-
-
-    # -----------------------------------------------------
-    # FORMAT SUMMARY
-    # -----------------------------------------------------
-
-    for cell in summary[1]:
-
-        cell.font = cell.font.copy(
-            bold=True
-        )
-
-
-    summary.freeze_panes = "A2"
-
-
-    # -----------------------------------------------------
-    # EXCEL CALCULATION SETTINGS
-    # -----------------------------------------------------
-
-    try:
-
-        wb.calculation.fullCalcOnLoad = True
-        wb.calculation.forceFullCalc = True
-        wb.calculation.calcMode = "auto"
-
-    except Exception:
-
-        pass
-
-
-    # =====================================================
-    # SAVE OUTPUT
-    # =====================================================
-
-    status.write(
-        "💾 Preparing output Excel..."
-    )
-
-    progress_bar.progress(95)
-
-
-    output = BytesIO()
-
-    wb.save(output)
-
-    wb.close()
-
-    output.seek(0)
-
-
-    # -----------------------------------------------------
-    # OUTPUT NAME
-    # -----------------------------------------------------
-
-    base_name = os.path.splitext(
-        input_name
-    )[0]
-
-    output_name = (
-        f"{base_name}_Output.xlsx"
-    )
-
-
-    progress_bar.progress(100)
-
-    status.write(
-        "✅ Processing completed successfully!"
-    )
-
-
-    return output, output_name
-
-
-# =========================================================
-# STREAMLIT USER INTERFACE
-# =========================================================
-
-st.title(
-    "📊 Ratio Confirmation"
-)
-
-st.write(
-    "Upload your Excel file and generate the Ratio Confirmation output."
-)
-
-
-# =========================================================
-# 1. FILE UPLOAD
-# =========================================================
-
-st.subheader(
-    "1. 📁 Excel Upload"
-)
-
-uploaded_file = st.file_uploader(
-    "Drag & Drop Excel file here",
-    type=[
-        "xlsx",
-        "xlsm"
-    ],
-    help="Upload an Excel .xlsx or .xlsm file."
-)
-
-
-# =========================================================
-# SHOW FILE NAME
-# =========================================================
-
-if uploaded_file is not None:
-
-    st.success(
-        f"📄 Selected file: {uploaded_file.name}"
-    )
-
-
-# =========================================================
-# 2. SERVICE
-# =========================================================
-
-st.subheader(
-    "2. 📋 Service"
-)
-
-service = st.selectbox(
-    "Select Service",
-    [
-        "FPS",
-        "IRIS"
-    ]
-)
-
-
-# =========================================================
-# 3. RATIO
-# =========================================================
-
-st.subheader(
-    "3. 🔢 Ratio"
-)
-
-ratio_input = st.text_input(
-    "Enter Ratio",
-    placeholder="Example: 75 or 20-60"
-)
-
-
-# =========================================================
-# PROCESS BUTTON
-# =========================================================
-
-st.subheader(
-    "4. ⚙️ Processing"
-)
-
-process_button = st.button(
-    "🚀 Process Excel",
-    type="primary",
-    use_container_width=True
-)
-
-
-# =========================================================
-# PROCESS
-# =========================================================
-
-if process_button:
-
-    if uploaded_file is None:
-
-        st.error(
-            "❌ Please upload an Excel file first."
-        )
-
-    elif not ratio_input.strip():
-
-        st.error(
-            "❌ Please enter a ratio. Example: 75 or 20-60."
-        )
-
-    else:
-
-        progress_bar = st.progress(
-            0
-        )
-
-        status = st.empty()
-
+        
         try:
+            wb.calculation.fullCalcOnLoad = True
+            wb.calculation.forceFullCalc = True
+            wb.calculation.calcMode = "auto"
+        except:
+            pass
+        
+        # Save to bytes
+        output = io.BytesIO()
+        wb.save(output)
+        wb.close()
+        output.seek(0)
+        
+        return output, ratios, service
+        
+    finally:
+        # Clean up temporary file
+        try:
+            os.unlink(tmp_input_path)
+        except:
+            pass
 
-            output_file, output_name = process_excel(
-                uploaded_file,
-                service,
-                ratio_input,
-                progress_bar,
-                status
-            )
+# ================= STREAMLIT UI =================
+st.set_page_config(
+    page_title="Excel Processor",
+    page_icon="📊",
+    layout="wide"
+)
 
-            st.success(
-                "🎉 Excel processing completed successfully!"
-            )
+st.title("📊 Excel File Processor")
+st.markdown("Process Excel files for FPS and IRIS services with ratio calculations")
 
-            st.download_button(
-                label="📥 Download Excel",
-                data=output_file,
-                file_name=output_name,
-                mime=(
-                    "application/vnd.openxmlformats-"
-                    "officedocument.spreadsheetml.sheet"
-                ),
-                use_container_width=True
-            )
+# Sidebar
+with st.sidebar:
+    st.header("⚙️ Settings")
+    
+    # File upload
+    uploaded_file = st.file_uploader(
+        "Upload Excel File",
+        type=['xlsx', 'xlsm', 'xls'],
+        help="Upload an Excel file (.xlsx, .xlsm, .xls)"
+    )
+    
+    # Service selection
+    service = st.selectbox(
+        "Select Service",
+        options=["FPS", "IRIS"],
+        help="Choose the service type (FPS or IRIS)"
+    )
+    
+    # Ratio input
+    ratio_input = st.text_input(
+        "Enter Ratio",
+        value="45-60",
+        help="Enter a single number (e.g., 75) or a range (e.g., 20-60)"
+    )
+    
+    # Process button
+    process_button = st.button(
+        "🚀 Process File",
+        type="primary",
+        use_container_width=True
+    )
 
+# Main content area
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    if uploaded_file:
+        st.success(f"✅ File uploaded: {uploaded_file.name}")
+        st.info(f"📄 File size: {uploaded_file.size / 1024:.2f} KB")
+        
+        # Preview uploaded file
+        try:
+            df = pd.read_excel(uploaded_file, sheet_name=0, nrows=5)
+            st.subheader("📋 File Preview")
+            st.dataframe(df, use_container_width=True)
+            uploaded_file.seek(0)  # Reset file pointer
         except Exception as e:
+            st.warning(f"Could not preview file: {str(e)}")
+    else:
+        st.info("📤 Please upload an Excel file to begin")
+        st.markdown("""
+        ### Instructions:
+        1. Upload an Excel file (.xlsx, .xlsm, or .xls)
+        2. Select the service (FPS or IRIS)
+        3. Enter the ratio (single value or range)
+        4. Click "Process File" to generate output
+        5. Download the processed file
+        """)
 
-            st.error(
-                f"❌ Processing Error: {str(e)}"
-            )
+with col2:
+    if uploaded_file and process_button:
+        with st.spinner("⏳ Processing file..."):
+            try:
+                # Read file content
+                file_content = uploaded_file.read()
+                
+                # Process the file
+                output_file, ratios, service_name = process_excel(
+                    file_content, service, ratio_input
+                )
+                
+                st.success("✅ File processed successfully!")
+                
+                # Display summary
+                st.subheader("📊 Processing Summary")
+                st.info(f"**Service:** {service_name}")
+                st.info(f"**Ratios:** {', '.join(map(str, ratios))}")
+                
+                # Download button
+                st.download_button(
+                    label="📥 Download Output File",
+                    data=output_file,
+                    file_name=f"{os.path.splitext(uploaded_file.name)[0]}_Output.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                
+            except Exception as e:
+                st.error(f"❌ Error processing file: {str(e)}")
+                st.exception(e)
+
+# Footer
+st.markdown("---")
+st.markdown("Built with ❤️ using Streamlit")
+
+# Additional information
+with st.expander("ℹ️ How it works"):
+    st.markdown("""
+    ### Process Workflow:
+    
+    1. **File Upload**: Upload your Excel file containing data
+    2. **Service Selection**: Choose between FPS or IRIS service
+    3. **Ratio Configuration**: 
+       - Single value: e.g., `75`
+       - Range: e.g., `20-60` (generates values at 5-interval steps)
+    4. **Processing**: The system will:
+       - Create ratio-specific sheets
+       - Calculate Total and Max Candidate values
+       - Generate Opr columns with ROUNDUP formulas
+       - Create service-specific columns (Tab, FPS/IRIS, OTG, etc.)
+       - Generate a Summary sheet with all calculations
+    5. **Download**: Get the processed file with all formulas and calculations
+    """)
